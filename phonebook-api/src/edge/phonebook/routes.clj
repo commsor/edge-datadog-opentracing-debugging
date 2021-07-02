@@ -3,14 +3,44 @@
    [bidi.bidi :as bidi]
    [clojure.tools.logging :as log]
    [clojure.java.io :as io]
+   [edge.phonebook.datadog :as datadog]
    [edge.phonebook.db :as db]
    [hiccup.core :refer [html]]
    [integrant.core :as ig]
    [schema.core :as s]
    [selmer.parser :as selmer]
+   [yada.handler]
+   [yada.interceptors]
    [yada.resources.resources-resource :refer [new-resources-resource]]
    [yada.swagger :as swagger]
    [yada.yada :as yada]))
+
+(defn- add-assoc-opentracing-span-interceptor
+  [model]
+  (yada.handler/prepend-interceptor
+   model
+   (fn [ctx]
+     (assoc ctx ::datadog/active-span (datadog/get-active-span)))))
+
+(defn- add-activate-opentracing-span-interceptor
+  [model]
+  (yada.handler/insert-interceptor
+   model
+   yada.interceptors/if-none-match
+   (fn [ctx]
+     (let [tracer (datadog/get-tracer)
+           active-span (get ::datadog/active-span ctx)]
+       (when (and tracer active-span)
+         (. tracer activateSpan active-span)))
+     ctx)))
+
+(defn application-resource
+  [model]
+  (-> model
+      (update :interceptor-chain #(or % yada/default-interceptor-chain))
+      (add-assoc-opentracing-span-interceptor)
+      (add-activate-opentracing-span-interceptor)
+      (yada/resource)))
 
 (defn- entry-map->vector [ctx m]
   (sort-by
@@ -26,8 +56,32 @@
                            {:route-params {:id k}}))))
     [] m)))
 
+(defn- new-index-get
+  [db ctx]
+  (let [q (get-in ctx [:parameters :query :q])
+        entries (if q
+                  (db/search-entries db q)
+                  (db/get-entries db))]
+    (log/infof "Language selected was %s" (yada/language ctx))
+    (case (yada/content-type ctx)
+      "text/html"
+      (selmer/render-file
+       "phonebook.html"
+       {:ctx ctx
+        :entries (datadog/trace entry-map->vector ctx entries)
+        :q q
+                ;; Here is an example of language negotiation. Of
+                ;; course, you would probably use something more
+                ;; sophisticated for full localization.
+        :messages (case (yada/language ctx)
+                    ("en" "en-gb" nil)
+                    {"description" "This is an example application."}
+                    "it" {"description" "Questa e una applicaizone esempio"})}
+       {:custom-resource-path (io/resource "phonebook-api/templates/")})
+      entries)))
+
 (defn new-index-resource [db]
-  (yada/resource
+  (application-resource
     {:id ::phonebook-index
      :description "Phonebook entries"
      :produces [{:media-type
@@ -44,28 +98,7 @@
 
        :response
        (fn [ctx]
-         (let [q (get-in ctx [:parameters :query :q])
-               entries (if q
-                         (db/search-entries db q)
-                         (db/get-entries db))]
-           (log/infof "Language selected was %s" (yada/language ctx))
-           (case (yada/content-type ctx)
-             "text/html"
-             (selmer/render-file
-               "phonebook.html"
-               {:ctx ctx
-                :entries (entry-map->vector ctx entries)
-                :q q
-                ;; Here is an example of language negotiation. Of
-                ;; course, you would probably use something more
-                ;; sophisticated for full localization.
-                :messages (case (yada/language ctx)
-                            ("en" "en-gb" nil)
-                            {"description" "This is an example application."}
-                            "it" {"description" "Questa e una applicaizone esempio"}
-                            )}
-               {:custom-resource-path (io/resource "phonebook-api/templates/")})
-             entries)))}
+         (datadog/trace new-index-get db ctx))}
 
       :post {:parameters {:form {:surname String :firstname String :phone String}}
              :consumes #{"application/x-www-form-urlencoded"}
@@ -74,7 +107,7 @@
                            (java.net.URI. (:uri (yada/uri-info ctx ::phonebook-entry {:route-params {:id id}})))))}}}))
 
 (defn new-entry-resource [db]
-  (yada/resource
+  (application-resource
    {:id ::phonebook-entry
     :description "Phonebook entry"
     :parameters {:path {:id Long}}
