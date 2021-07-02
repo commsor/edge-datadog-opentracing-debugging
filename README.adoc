@@ -1,3 +1,5 @@
+To run, use `cd phonebook-api && ../bin/rebel --nrepl -A:dev`. You can fire a test request at `curl http://localhost:4900`.
+
 = Edge
 
 link:https://clojurians.zulipchat.com/#narrow/stream/151045-JUXT[image:https://img.shields.io/badge/zulip-join_chat-brightgreen.svg[]]
