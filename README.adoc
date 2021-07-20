@@ -1,4 +1,4 @@
-To run, use `cd phonebook-api && ../bin/rebel --nrepl -A:dev`. You can fire a test request at `curl http://localhost:4900`.
+To run, use `cd phonebook-api && ../bin/run-dd`. You can fire a test request at `curl http://localhost:4900`.
 
 = Edge
 

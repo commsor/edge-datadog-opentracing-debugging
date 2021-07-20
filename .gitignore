@@ -11,3 +11,5 @@
 
 **/.vscode
 **/.clj-kondo/.cache
+
+dd-trace.log
